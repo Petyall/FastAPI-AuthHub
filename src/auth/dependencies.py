@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import Depends, Request
 
 from src.models import User
@@ -5,6 +6,7 @@ from src.auth.constants import UserRole
 from src.auth.services import UserRepository
 from src.auth.utils.jwt_handler import jwt_handler
 from src.exceptions import (
+    UserBannedException,
     UserNotFoundException,
     UserHasNoRightsException,
     InvalidAccessTokenException,
@@ -76,6 +78,20 @@ async def get_current_user(token: str = Depends(get_access_token)) -> User:
     user = await UserRepository.find_one_or_none(email=email)
     if not user:
         raise UserNotFoundException(email)
+    
+    if user.ban_date:
+        raise UserBannedException(user.ban_date)
+
+    pwd_reset_at_ts = payload.get("pwd_reset_at")
+    if not pwd_reset_at_ts:
+        raise InvalidAccessTokenException
+
+    token_pwd_reset_at = datetime.fromtimestamp(pwd_reset_at_ts).replace(microsecond=0)
+    user_pwd_reset_at = user.last_password_reset.replace(microsecond=0) if user.last_password_reset else None
+
+    if user_pwd_reset_at and token_pwd_reset_at < user_pwd_reset_at:
+        raise InvalidAccessTokenException
+
 
     return user
 

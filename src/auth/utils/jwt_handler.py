@@ -33,7 +33,7 @@ class JWTHandler:
         self.refresh_token_exp = settings.JWT_REFRESH_TOKEN_EXPIRE
         self.reset_token_exp = settings.JWT_RESET_TOKEN_EXPIRE
 
-    async def create_access_token(self, subject: EmailStr) -> str:
+    async def create_access_token(self, subject: EmailStr, pwd_reset_at: datetime) -> str:
         """
         Создаёт access-токен для аутентификации пользователя.
 
@@ -43,7 +43,7 @@ class JWTHandler:
         Returns:
             Подписанный JWT access-токен в виде строки.
         """
-        token, _, _ = await self._create_token(subject, timedelta(minutes=self.access_token_exp))
+        token, _, _ = await self._create_token(subject, timedelta(minutes=self.access_token_exp), pwd_reset_at=pwd_reset_at)
         return token
 
     async def create_refresh_token(self, subject: str) -> str:
@@ -73,7 +73,7 @@ class JWTHandler:
         token, _, _ = await self._create_token(subject, timedelta(minutes=self.reset_token_exp))
         return token
 
-    async def _create_token(self, email: str, expires_delta: timedelta) -> tuple[str, str, datetime]:
+    async def _create_token(self, email: str, expires_delta: timedelta, *, pwd_reset_at: datetime = None) -> tuple[str, str, datetime]:
         """
         Создаёт JWT-токен с указанным временем истечения.
 
@@ -102,6 +102,9 @@ class JWTHandler:
             "exp": int(expire.timestamp()),
             "jti": jti,
         }
+
+        if pwd_reset_at:
+            payload["pwd_reset_at"] = int(pwd_reset_at.timestamp())
 
         token = jwt.encode(payload, self.private_key, algorithm=self.algorithm)
         return token, jti, expire

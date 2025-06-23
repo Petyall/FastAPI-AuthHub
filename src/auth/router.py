@@ -10,15 +10,19 @@ from src.logs.logger import logger
 from src.limits.limiter import limiter
 from src.auth.constants import UserRole
 from src.auth.utils.jwt_handler import jwt_handler
-from src.auth.utils.cookie_handler import cookie_handler
+from src.email.utils.email_handler import email_handler
 from src.auth.utils.password_validator import validator
+from src.auth.utils.cookie_handler import cookie_handler
+from src.auth.utils.userban_handler import user_ban_handler
 from src.auth.utils.password_handler import password_handler
 from src.auth.services import RefreshTokenRepository, UserRepository
-from src.email.utils.email_handler import email_handler
 from src.auth.dependencies import get_current_admin_user, get_refresh_token
+from src.users.schemas.responses import UserAdminResponse
 from src.auth.schemas.responses import MessageResponse, AuthResponse, RefreshTokenResponse
-from src.auth.schemas.requests import UserCreateRequest, UserLoginRequest, ForgotPasswordRequest, ResetPasswordRequest
+from src.auth.schemas.requests import UserCreateRequest, UserLoginRequest, ForgotPasswordRequest, ResetPasswordRequest, UserBaseRequest
 from src.exceptions import (
+    UserBannedException,
+    CannotBanSelfException,
     UserAlreadyExistsException,
     InvalidCredentialsException,
     InvalidRefreshTokenException,
@@ -89,7 +93,7 @@ async def user_registration(request: Request, user_data: UserCreateRequest, back
         logger.error(f"Ошибка при создании пользователя: {type(e).__name__}: {e}")
         raise InternalServerErrorException("Не удалось создать пользователя")
 
-    logger.info(f"Пользователь успешно зарегистрирован: {user_data.email}")
+    logger.info(f"Пользователь успешно зарегистрирован: {user_data.email}", extra={"log_info": True})
 
     message = f"Пользователь '{user_data.email}' создан успешно"
 
@@ -118,7 +122,7 @@ async def user_registration(request: Request, user_data: UserCreateRequest, back
 
 @router.post("/login", response_model=AuthResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
-async def user_login(request: Request, user_data: UserLoginRequest) -> AuthResponse:
+async def user_login(request: Request, user_data: UserLoginRequest, background_tasks: BackgroundTasks) -> AuthResponse:
     """
     Аутентифицирует пользователя и устанавливает токены доступа и обновления в cookies.
 
@@ -136,8 +140,15 @@ async def user_login(request: Request, user_data: UserLoginRequest) -> AuthRespo
     if not user or not password_handler.verify_password(user_data.password, user.password):
         raise InvalidCredentialsException
 
-    access_token = await jwt_handler.create_access_token(subject=user.email)
+    if user.ban_date:
+        raise UserBannedException(user.ban_date)
+
+    access_token = await jwt_handler.create_access_token(subject=user.email, pwd_reset_at=user.last_password_reset)
     refresh_token = await jwt_handler.create_refresh_token(subject=user.email)
+
+    background_tasks.add_task(UserRepository.update_last_activity, user.email)
+
+    logger.info(f"Пользователь {user.email} успешно вошел в систему", extra={"log_info": True})
 
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -177,6 +188,8 @@ async def logout(refresh_token: str = Depends(get_refresh_token)) -> MessageResp
     if not refresh_token_check:
         logger.error(f"Не найден Refresh-токен {jti} для пользователя {email}")
 
+    logger.info(f"Пользователь {email} вышел из системы", extra={"log_info": True})
+
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
         content=MessageResponse(message="Выход выполнен").dict()
@@ -189,7 +202,7 @@ async def logout(refresh_token: str = Depends(get_refresh_token)) -> MessageResp
 
 @router.post("/refresh", response_model=RefreshTokenResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("10/minute")
-async def refresh_token(request: Request, refresh_token: str = Depends(get_refresh_token)) -> RefreshTokenResponse:
+async def refresh_token(request: Request, background_tasks: BackgroundTasks, refresh_token: str = Depends(get_refresh_token)) -> RefreshTokenResponse:
     """
     Обновляет токены доступа и обновления, отзывая старый refresh-токен.
 
@@ -213,6 +226,10 @@ async def refresh_token(request: Request, refresh_token: str = Depends(get_refre
     if not jti or not email:
         raise InvalidRefreshTokenException
 
+    user = await UserRepository.find_one_or_none(email=email)
+    if not user:
+        raise InvalidCredentialsException
+    
     token = await RefreshTokenRepository.find_one_or_none(jti=jti)
     if not token or token.revoked or datetime.now() - token.created_at > timedelta(days=30):
         raise InvalidRefreshTokenException
@@ -221,8 +238,12 @@ async def refresh_token(request: Request, refresh_token: str = Depends(get_refre
     if not refresh_token_check:
         logger.error(f"Не найден Refresh-токен {jti} для пользователя {email}")
 
-    new_access_token = await jwt_handler.create_access_token(subject=email)
+    new_access_token = await jwt_handler.create_access_token(subject=email, pwd_reset_at=user.last_password_reset)
     new_refresh_token = await jwt_handler.create_refresh_token(subject=email)
+
+    background_tasks.add_task(UserRepository.update_last_activity, email)
+
+    logger.info(f"Пользователь {email} обновил токены", extra={"log_info": True})
 
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -252,6 +273,9 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
         Для безопасности возвращает одинаковое сообщение независимо от существования пользователя.
     """
     user = await UserRepository.find_one_or_none(email=data.email)
+    if user.ban_date:
+        raise UserBannedException(user.ban_date)
+
     if user:
         password_reset_token = await jwt_handler.create_reset_token(subject=user.email)
 
@@ -260,6 +284,8 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
             password_reset_token=password_reset_token,
             password_reset_token_created_at=datetime.now()
         )
+
+        logger.info(f"Инициирован сброс пароля для пользователя {user.email}", extra={"log_info": True})
 
         async def send_password_reset_email(email: str, token: str):
             """
@@ -314,6 +340,9 @@ async def reset_password(request: Request, data: ResetPasswordRequest) -> Messag
     if not user:
         raise InvalidPasswordResetTokenException
 
+    if user.ban_date:
+        raise UserBannedException(user.ban_date)
+
     if password_handler.verify_password(data.new_password, user.password):
         raise PasswordIdenticalToPreviousException
 
@@ -322,20 +351,28 @@ async def reset_password(request: Request, data: ResetPasswordRequest) -> Messag
         raise PasswordValidationErrorException(validation_result)
 
     new_hashed = password_handler.hash_password(data.new_password)
-    await UserRepository.update(id=user.id, password=new_hashed, password_reset_token=None, password_reset_token_created_at=None)
+    await UserRepository.update(id=user.id, password=new_hashed, password_reset_token=None, password_reset_token_created_at=None, last_password_reset=datetime.utcnow())
+    await RefreshTokenRepository.revoke_all_by_user_email(email=user.email)
+
+    logger.info(f"Пользователь {user.email} успешно сбросил пароль", extra={"log_info": True})
 
     return MessageResponse(message="Пароль успешно изменён")
 
 
-@router.get("/check")
-async def check_admin(user=Depends(get_current_admin_user)):
-    """
-    Проверяет, является ли текущий пользователь администратором.
+@router.patch("/ban", response_model=UserAdminResponse)
+async def ban_user(data: UserBaseRequest, admin_user=Depends(get_current_admin_user)):
+    if data.email == admin_user.email:
+        raise CannotBanSelfException
+    user = await user_ban_handler.change_ban_status(data.email, should_ban=True)
+    await RefreshTokenRepository.revoke_all_by_user_email(data.email)
 
-    Args:
-        user: Текущий пользователь, полученный через зависимость.
+    logger.info(f"Пользователь {data.email} забанен администратором {admin_user.email}", extra={"log_info": True})
 
-    Returns:
-        Данные текущего пользователя, если он администратор.
-    """
+    return user
+
+
+@router.patch("/unban", response_model=UserAdminResponse, status_code=status.HTTP_200_OK)
+async def unban_user(data: UserBaseRequest, admin_user=Depends(get_current_admin_user)):
+    user = await user_ban_handler.change_ban_status(data.email, should_ban=False)
+    logger.info(f"Пользователь {data.email} разбанен администратором {admin_user.email}", extra={"log_info": True})
     return user

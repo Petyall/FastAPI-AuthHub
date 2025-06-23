@@ -1,8 +1,8 @@
-""".
+"""Initial consolidated migration
 
-Revision ID: 162c139b5618
+Revision ID: 312dbc1dc93d
 Revises: 
-Create Date: 2025-05-30 12:53:23.495067
+Create Date: 2025-06-23 15:52:35.415855
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '162c139b5618'
+revision: str = '312dbc1dc93d'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -25,6 +25,9 @@ def upgrade() -> None:
     sa.Column('title', sa.String(length=50), nullable=False),
     sa.PrimaryKeyConstraint('title')
     )
+    # Вставка начальных данных в таблицу roles
+    op.execute("INSERT INTO roles (title) VALUES ('USER'), ('ADMIN')")
+
     op.create_table('users',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('email', sa.String(length=255), nullable=False),
@@ -36,9 +39,15 @@ def upgrade() -> None:
     sa.Column('paternal_name', sa.String(length=100), nullable=True),
     sa.Column('phone_number', sa.String(length=20), nullable=True),
     sa.Column('birthday', sa.Date(), nullable=True),
-    sa.Column('ban', sa.Boolean(), nullable=False),
     sa.Column('ban_date', sa.DateTime(), nullable=True),
     sa.Column('role_title', sa.String(length=50), nullable=False),
+    sa.Column('email_confirmed', sa.Boolean(), server_default='false', nullable=False),
+    sa.Column('email_confirmed_at', sa.DateTime(), nullable=True),
+    sa.Column('confirmation_token', sa.Text(), nullable=True),
+    sa.Column('confirmation_token_created_at', sa.DateTime(), nullable=True),
+    sa.Column('password_reset_token', sa.String(), nullable=True),
+    sa.Column('password_reset_token_created_at', sa.DateTime(), nullable=True),
+    sa.Column('last_password_reset', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['role_title'], ['roles.title'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -65,5 +74,7 @@ def downgrade() -> None:
     op.drop_table('refresh_tokens')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
+    # Удаление начальных данных из таблицы roles
+    op.execute("DELETE FROM roles WHERE title IN ('USER', 'ADMIN')")
     op.drop_table('roles')
     # ### end Alembic commands ###

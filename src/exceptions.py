@@ -32,6 +32,33 @@ class UserHasNoRightsException(ProjectException):
     status_code = status.HTTP_403_FORBIDDEN
     detail = "Доступ запрещён"
 
+
+class UserAlreadyHasBanException(ProjectException):
+    status_code = status.HTTP_409_CONFLICT
+
+    def __init__(self, user_email: str, ban_date: str):
+        super().__init__(detail=f"Пользователь {user_email} уже имеет блокировку с {ban_date}")
+
+
+class UserHasNotBanException(ProjectException):
+    status_code = status.HTTP_409_CONFLICT
+
+    def __init__(self, user_email: str):
+        super().__init__(detail=f"У пользователя {user_email} нет блокировки")
+
+
+class UserBannedException(ProjectException):
+    status_code = status.HTTP_403_FORBIDDEN
+
+    def __init__(self, ban_date: str):
+        super().__init__(detail=f"Пользователь заблокирован с {ban_date.strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+class CannotBanSelfException(ProjectException):
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Вы не можете заблокировать сами себя"
+
+
 # --- Ошибки, связанные с паролем ---
 
 class PasswordValidationErrorException(ProjectException):

@@ -20,7 +20,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password: Mapped[str] = mapped_column(String(512))
-    registration_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.now())
+    registration_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow())
     last_activity: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     first_name: Mapped[str] = mapped_column(String(100), nullable=True)
@@ -29,7 +29,6 @@ class User(Base):
     phone_number: Mapped[str] = mapped_column(String(20), nullable=True)
     birthday: Mapped[date] = mapped_column(Date, nullable=True)
 
-    ban: Mapped[bool] = mapped_column(Boolean, default=False)
     ban_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     role_title: Mapped[str] = mapped_column(ForeignKey("roles.title"))
@@ -44,6 +43,7 @@ class User(Base):
 
     password_reset_token: Mapped[str | None] = mapped_column(String(), nullable=True)
     password_reset_token_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_password_reset: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.utcnow())
 
 
 class RefreshToken(Base):
@@ -53,6 +53,6 @@ class RefreshToken(Base):
     email: Mapped[str] = mapped_column(String(255), ForeignKey("users.email", ondelete="CASCADE"), index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     revoked: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow())
 
     user: Mapped["User"] = relationship(back_populates="refresh_tokens")

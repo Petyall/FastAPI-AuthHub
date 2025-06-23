@@ -59,6 +59,8 @@ async def confirm_email(request: Request, data: EmailConfirmationRequest) -> Mes
         logger.error(f"Ошибка при подтверждении email: не удалось обновить пользователя с email {data.email}")
         raise InvalidOrExpiredEmailTokenException()
 
+    logger.info(f"Email пользователя {data.email} успешно подтверждён", extra={"log_info": True})
+
     return MessageResponse(message="Email успешно подтверждён")
 
 
@@ -106,5 +108,7 @@ async def resend_confirmation(request: Request, current_user: User = Depends(get
     except Exception as e:
         logger.error(f"Ошибка отправки email для подтверждения регистрации ({user.email}): {type(e).__name__}: {e}")
         return MessageResponse(message="Если аккаунт существует, письмо отправлено повторно")
+
+    logger.info(f"Письмо с подтверждением email отправлено пользователю {user.email}", extra={"log_info": True})
 
     return MessageResponse(message="Если аккаунт существует, письмо отправлено повторно")
