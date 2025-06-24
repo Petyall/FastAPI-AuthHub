@@ -124,17 +124,23 @@ async def user_registration(request: Request, user_data: UserCreateRequest, back
 @limiter.limit("5/minute")
 async def user_login(request: Request, user_data: UserLoginRequest, background_tasks: BackgroundTasks) -> AuthResponse:
     """
-    Аутентифицирует пользователя и устанавливает токены доступа и обновления в cookies.
+    Аутентифицирует пользователя по email и паролю, генерирует JWT-токены доступа и обновления, устанавливает их в cookies.
+
+    Выполняется проверка существования пользователя, валидности пароля, статуса блокировки,
+    после чего создаются токены и (в фоне) обновляется активность пользователя.
 
     Args:
-        request: HTTP-запрос для контекста лимитера.
-        user_data: Учетные данные пользователя (email и пароль).
+        request: Объект HTTP-запроса (для использования лимитера).
+        user_data: Введённые пользователем email и пароль.
+        background_tasks: Очередь фоновых задач (для обновления активности пользователя).
 
     Returns:
-        Ответ с сообщением об успешном входе и email пользователя, с токенами в cookies.
+        AuthResponse: Ответ с сообщением об успешной аутентификации и email пользователя.
+        JWT access и refresh токены устанавливаются в cookies.
 
     Raises:
-        InvalidCredentialsException: Если email или пароль неверны.
+        InvalidCredentialsException: Если пользователь не найден или введён неправильный пароль.
+        UserBannedException: Если пользователь заблокирован (присутствует `ban_date`).
     """
     user = await UserRepository.find_one_or_none(email=user_data.email)
     if not user or not password_handler.verify_password(user_data.password, user.password):
@@ -204,18 +210,27 @@ async def logout(refresh_token: str = Depends(get_refresh_token)) -> MessageResp
 @limiter.limit("10/minute")
 async def refresh_token(request: Request, background_tasks: BackgroundTasks, refresh_token: str = Depends(get_refresh_token)) -> RefreshTokenResponse:
     """
-    Обновляет токены доступа и обновления, отзывая старый refresh-токен.
+    Обновляет access и refresh токены, отзывая старый refresh-токен.
+
+    Декодирует refresh-токен, проверяет его действительность и принадлежность существующему пользователю,
+    а также факт его отзыва и срока действия (не более 30 дней). 
+    Генерирует новую пару токенов, обновляет активность пользователя и устанавливает токены в cookies.
 
     Args:
-        request: HTTP-запрос для контекста лимитера.
-        refresh_token: Refresh-токен, полученный из зависимости.
+        request: Объект HTTP-запроса (для использования лимитера).
+        background_tasks: Очередь фоновых задач (для обновления активности пользователя).
+        refresh_token: Refresh-токен, полученный из зависимости `get_refresh_token`.
 
     Returns:
-        Ответ с сообщением об успешном обновлении токенов и email пользователя, с новыми токенами в cookies.
+        RefreshTokenResponse: Ответ с сообщением об успешном обновлении и email пользователя.
+        Новые JWT-токены устанавливаются в cookies.
 
     Raises:
-        RefreshTokenNotFoundException: Если refresh-токен отсутствует.
-        InvalidRefreshTokenException: Если refresh-токен недействителен, отозван или истёк.
+        RefreshTokenNotFoundException: Если refresh-токен не передан.
+        InvalidRefreshTokenException:
+            - Если refresh-токен некорректен или не содержит нужных данных;
+            - Если он отсутствует в базе, был отозван или просрочен;
+        InvalidCredentialsException: Если пользователь, указанный в токене, не найден.
     """
     if not refresh_token:
         raise RefreshTokenNotFoundException
@@ -361,6 +376,23 @@ async def reset_password(request: Request, data: ResetPasswordRequest) -> Messag
 
 @router.patch("/ban", response_model=UserAdminResponse)
 async def ban_user(data: UserBaseRequest, admin_user=Depends(get_current_admin_user)):
+    """
+    Блокирует пользователя по email. Доступно только администраторам.
+
+    После блокировки пользователя, все его активные refresh-токены отзываются.
+
+    Args:
+        data: Данные с email пользователя, которого нужно заблокировать.
+        admin_user: Авторизованный администратор, полученный через зависимость.
+
+    Returns:
+        UserAdminResponse: Объект пользователя с обновлённым статусом блокировки.
+
+    Raises:
+        CannotBanSelfException: Если администратор пытается заблокировать самого себя.
+        UserNotFoundException: Если пользователь с указанным email не найден.
+        UserAlreadyHasBanException: Если пользователь уже заблокирован.
+    """
     if data.email == admin_user.email:
         raise CannotBanSelfException
     user = await user_ban_handler.change_ban_status(data.email, should_ban=True)
@@ -373,6 +405,20 @@ async def ban_user(data: UserBaseRequest, admin_user=Depends(get_current_admin_u
 
 @router.patch("/unban", response_model=UserAdminResponse, status_code=status.HTTP_200_OK)
 async def unban_user(data: UserBaseRequest, admin_user=Depends(get_current_admin_user)):
+    """
+    Разблокирует ранее заблокированного пользователя по email. Доступно только администраторам.
+
+    Args:
+        data: Данные с email пользователя, которого нужно разблокировать.
+        admin_user: Авторизованный администратор, полученный через зависимость.
+
+    Returns:
+        UserAdminResponse: Объект пользователя с обновлённым статусом (без блокировки).
+
+    Raises:
+        UserNotFoundException: Если пользователь с указанным email не найден.
+        UserHasNotBanException: Если пользователь не был заблокирован ранее.
+    """
     user = await user_ban_handler.change_ban_status(data.email, should_ban=False)
     logger.info(f"Пользователь {data.email} разбанен администратором {admin_user.email}", extra={"log_info": True})
     return user

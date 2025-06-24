@@ -3,7 +3,6 @@ from sqlalchemy import update
 from pydantic import EmailStr
 from datetime import datetime, timedelta
 
-
 from src.logs.logger import logger
 from src.services import BaseRepository
 from src.models import User, RefreshToken

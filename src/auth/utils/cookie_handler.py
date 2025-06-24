@@ -6,7 +6,7 @@ class CookieHandler:
     """
     Класс для управления установкой аутентификационных токенов в cookies.
 
-    Предоставляет методы для безопасной установки access- и refresh-токенов в HTTP-ответ.
+    Предоставляет методы для безопасной установки access и refresh-токенов в HTTP-ответ.
     """
 
     def __init__(self, access_token_expire: int = settings.JWT_ACCESS_TOKEN_EXPIRE, refresh_token_expire: int = settings.JWT_REFRESH_TOKEN_EXPIRE):

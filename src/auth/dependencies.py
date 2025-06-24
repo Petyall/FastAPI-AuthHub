@@ -55,17 +55,25 @@ async def get_refresh_token(request: Request) -> str:
 
 async def get_current_user(token: str = Depends(get_access_token)) -> User:
     """
-    Получает текущего пользователя на основе access-токена.
+    Извлекает текущего пользователя на основе access-токена.
+
+    Производит декодирование JWT, проверку email, статуса блокировки пользователя,
+    а также сверку даты сброса пароля для предотвращения использования устаревшего токена.
 
     Args:
-        token: Access-токен, полученный из зависимости get_access_token.
+        token: Access-токен, извлекаемый из заголовка авторизации с помощью зависимости `get_access_token`.
 
     Returns:
-        Экземпляр модели User, соответствующий пользователю.
+        User: Объект пользователя, соответствующий данным токена.
 
     Raises:
-        InvalidAccessTokenException: Если токен недействителен или не содержит email.
+        InvalidAccessTokenException: 
+            - Если токен не удалось декодировать,
+            - если отсутствует email (`sub`),
+            - если отсутствует поле `pwd_reset_at`,
+            - если токен был выпущен до последнего сброса пароля.
         UserNotFoundException: Если пользователь с указанным email не найден.
+        UserBannedException: Если пользователь заблокирован (имеет значение `ban_date`).
     """
     payload = await jwt_handler.decode_token(token)
     if not payload:
@@ -91,7 +99,6 @@ async def get_current_user(token: str = Depends(get_access_token)) -> User:
 
     if user_pwd_reset_at and token_pwd_reset_at < user_pwd_reset_at:
         raise InvalidAccessTokenException
-
 
     return user
 

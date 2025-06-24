@@ -1,5 +1,8 @@
+from pathlib import Path
 from typing import Optional, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.rsa_keygen import generate_rsa_key_pair
 
 
 class Settings(BaseSettings):
@@ -66,6 +69,20 @@ class Settings(BaseSettings):
 
     # --- Ограничения ---
     ENABLE_RATE_LIMITER: bool  # Включение ограничителя частоты запросов
+
+
+# Проверка и генерация ключей при первом запуске
+_env_file = Path(".env")
+if _env_file.exists():
+    from dotenv import dotenv_values
+    env_vars = dotenv_values(_env_file)
+
+    private_key_path = env_vars.get("JWT_PRIVATE_KEY_PATH")
+    public_key_path = env_vars.get("JWT_PUBLIC_KEY_PATH")
+
+    if private_key_path and public_key_path:
+        if not Path(private_key_path).exists() or not Path(public_key_path).exists():
+            generate_rsa_key_pair(private_key_path, public_key_path)
 
 
 # Экземпляр настроек, инициализированный при загрузке модуля
